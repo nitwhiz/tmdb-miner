@@ -2,6 +2,7 @@ package scraper
 
 import (
 	"context"
+	"github.com/nitwhiz/tmdb-scraper/internal/config"
 	"github.com/nitwhiz/tmdb-scraper/internal/poster"
 	"github.com/ryanbradynd05/go-tmdb"
 	log "github.com/sirupsen/logrus"
@@ -9,10 +10,21 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"strconv"
+	"sync"
 	"time"
 )
 
-func FetchTvSeries(api *tmdb.TMDb, db *mongo.Database, pf *poster.Fetcher, maxPages int) error {
+type baseTvGetterFunc func(api *tmdb.TMDb, opts map[string]string) (*tmdb.TvPagedResults, error)
+
+func GetTvDiscover(api *tmdb.TMDb, opts map[string]string) (*tmdb.TvPagedResults, error) {
+	return api.DiscoverTV(opts)
+}
+
+func GetTvPopular(api *tmdb.TMDb, opts map[string]string) (*tmdb.TvPagedResults, error) {
+	return api.GetTvPopular(opts)
+}
+
+func FetchTvSeries(baseGetter baseTvGetterFunc, api *tmdb.TMDb, db *mongo.Database, pf *poster.Fetcher, maxPages int) error {
 	l := log.WithFields(log.Fields{
 		"type": "tv_series",
 	})
@@ -21,7 +33,6 @@ func FetchTvSeries(api *tmdb.TMDb, db *mongo.Database, pf *poster.Fetcher, maxPa
 	page := 1
 
 	opts := map[string]string{
-		"sort_by":  "rating.desc",
 		"language": Language,
 		"region":   Region,
 		"page":     strconv.Itoa(page),
@@ -35,7 +46,9 @@ func FetchTvSeries(api *tmdb.TMDb, db *mongo.Database, pf *poster.Fetcher, maxPa
 
 		l.Info("fetching page")
 
-		tv, err := api.DiscoverTV(opts)
+		tv, err := baseGetter(api, opts)
+
+		requestCounter += 1
 
 		if err != nil {
 			return err
@@ -65,10 +78,12 @@ func FetchTvSeries(api *tmdb.TMDb, db *mongo.Database, pf *poster.Fetcher, maxPa
 				"language": Language,
 			})
 
+			requestCounter += 1
+
 			if err != nil {
 				l.Warn(err)
 
-				time.Sleep(50 * time.Millisecond)
+				time.Sleep(10 * time.Millisecond)
 				continue
 			}
 
@@ -93,7 +108,7 @@ func FetchTvSeries(api *tmdb.TMDb, db *mongo.Database, pf *poster.Fetcher, maxPa
 				}
 			}
 
-			time.Sleep(50 * time.Millisecond)
+			time.Sleep(10 * time.Millisecond)
 		}
 
 		page = tv.Page + 1
@@ -103,4 +118,20 @@ func FetchTvSeries(api *tmdb.TMDb, db *mongo.Database, pf *poster.Fetcher, maxPa
 	}
 
 	return nil
+}
+
+func scrapeTvPopular(wg *sync.WaitGroup, tmdbAPI *tmdb.TMDb, db *mongo.Database, pf *poster.Fetcher) {
+	defer wg.Done()
+
+	if err := FetchTvSeries(GetTvPopular, tmdbAPI, db, pf, config.C.Rates.PagesPerScrape); err != nil {
+		log.Error(err)
+	}
+}
+
+func scrapeTvDiscover(wg *sync.WaitGroup, tmdbAPI *tmdb.TMDb, db *mongo.Database, pf *poster.Fetcher) {
+	defer wg.Done()
+
+	if err := FetchTvSeries(GetTvDiscover, tmdbAPI, db, pf, config.C.Rates.PagesPerScrape); err != nil {
+		log.Error(err)
+	}
 }

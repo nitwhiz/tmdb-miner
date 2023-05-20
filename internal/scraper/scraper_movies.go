@@ -2,6 +2,7 @@ package scraper
 
 import (
 	"context"
+	"github.com/nitwhiz/tmdb-scraper/internal/config"
 	"github.com/nitwhiz/tmdb-scraper/internal/poster"
 	"github.com/ryanbradynd05/go-tmdb"
 	log "github.com/sirupsen/logrus"
@@ -9,10 +10,21 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"strconv"
+	"sync"
 	"time"
 )
 
-func FetchMovies(api *tmdb.TMDb, db *mongo.Database, pf *poster.Fetcher, maxPages int) error {
+type baseMovieGetterFunc func(api *tmdb.TMDb, opts map[string]string) (*tmdb.MoviePagedResults, error)
+
+func GetMovieDiscover(api *tmdb.TMDb, opts map[string]string) (*tmdb.MoviePagedResults, error) {
+	return api.DiscoverMovie(opts)
+}
+
+func GetMoviePopular(api *tmdb.TMDb, opts map[string]string) (*tmdb.MoviePagedResults, error) {
+	return api.GetMoviePopular(opts)
+}
+
+func FetchMovies(baseGetter baseMovieGetterFunc, api *tmdb.TMDb, db *mongo.Database, pf *poster.Fetcher, maxPages int) error {
 	l := log.WithFields(log.Fields{
 		"type": "movies",
 	})
@@ -21,7 +33,6 @@ func FetchMovies(api *tmdb.TMDb, db *mongo.Database, pf *poster.Fetcher, maxPage
 	page := 1
 
 	opts := map[string]string{
-		"sort_by":  "rating.desc",
 		"language": Language,
 		"region":   Region,
 		"page":     strconv.Itoa(page),
@@ -35,7 +46,9 @@ func FetchMovies(api *tmdb.TMDb, db *mongo.Database, pf *poster.Fetcher, maxPage
 
 		l.Info("fetching page")
 
-		movies, err := api.DiscoverMovie(opts)
+		movies, err := baseGetter(api, opts)
+
+		requestCounter += 1
 
 		if err != nil {
 			return err
@@ -65,10 +78,12 @@ func FetchMovies(api *tmdb.TMDb, db *mongo.Database, pf *poster.Fetcher, maxPage
 				"language": Language,
 			})
 
+			requestCounter += 1
+
 			if err != nil {
 				l.Warn(err)
 
-				time.Sleep(50 * time.Millisecond)
+				time.Sleep(10 * time.Millisecond)
 				continue
 			}
 
@@ -93,7 +108,7 @@ func FetchMovies(api *tmdb.TMDb, db *mongo.Database, pf *poster.Fetcher, maxPage
 				}
 			}
 
-			time.Sleep(50 * time.Millisecond)
+			time.Sleep(10 * time.Millisecond)
 		}
 
 		page = movies.Page + 1
@@ -103,4 +118,20 @@ func FetchMovies(api *tmdb.TMDb, db *mongo.Database, pf *poster.Fetcher, maxPage
 	}
 
 	return nil
+}
+
+func scrapeMoviePopular(wg *sync.WaitGroup, tmdbAPI *tmdb.TMDb, db *mongo.Database, pf *poster.Fetcher) {
+	defer wg.Done()
+
+	if err := FetchMovies(GetMoviePopular, tmdbAPI, db, pf, config.C.Rates.PagesPerScrape); err != nil {
+		log.Error(err)
+	}
+}
+
+func scrapeMovieDiscover(wg *sync.WaitGroup, tmdbAPI *tmdb.TMDb, db *mongo.Database, pf *poster.Fetcher) {
+	defer wg.Done()
+
+	if err := FetchMovies(GetMovieDiscover, tmdbAPI, db, pf, config.C.Rates.PagesPerScrape); err != nil {
+		log.Error(err)
+	}
 }

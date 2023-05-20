@@ -2,15 +2,38 @@ package scraper
 
 import (
 	"context"
+	"fmt"
 	"github.com/nitwhiz/tmdb-scraper/internal/config"
 	"github.com/nitwhiz/tmdb-scraper/internal/poster"
 	"github.com/ryanbradynd05/go-tmdb"
 	log "github.com/sirupsen/logrus"
 	"go.mongodb.org/mongo-driver/mongo"
+	"sync"
 	"time"
 )
 
+var requestCounter = float64(0)
+var secondsRunning = float64(0)
+
+type rpsLogger struct {
+	formatter log.Formatter
+}
+
+func (l rpsLogger) Format(entry *log.Entry) ([]byte, error) {
+	if secondsRunning == 0 {
+		entry.Data["rps"] = "0"
+	} else {
+		entry.Data["rps"] = fmt.Sprintf("%.2f", requestCounter/secondsRunning)
+	}
+
+	return l.formatter.Format(entry)
+}
+
 func runScrape(tmdbAPI *tmdb.TMDb, db *mongo.Database, pf *poster.Fetcher) error {
+	log.SetFormatter(rpsLogger{
+		formatter: log.StandardLogger().Formatter,
+	})
+
 	log.Info("begin scrape")
 
 	if err := FetchMovieGenres(tmdbAPI, db); err != nil {
@@ -21,13 +44,38 @@ func runScrape(tmdbAPI *tmdb.TMDb, db *mongo.Database, pf *poster.Fetcher) error
 		return err
 	}
 
-	if err := FetchMovies(tmdbAPI, db, pf, config.C.Rates.PagesPerScrape); err != nil {
-		return err
-	}
+	requestCounter = float64(0)
+	secondsRunning = float64(0)
 
-	if err := FetchTvSeries(tmdbAPI, db, pf, config.C.Rates.PagesPerScrape); err != nil {
-		return err
-	}
+	wg := &sync.WaitGroup{}
+
+	go func() {
+		for {
+			select {
+			case <-time.After(10 * time.Millisecond):
+				if secondsRunning >= 10 {
+					requestCounter = 0
+					secondsRunning = .01
+				} else {
+					secondsRunning += .01
+				}
+			}
+		}
+	}()
+
+	wg.Add(1)
+	go scrapeMoviePopular(wg, tmdbAPI, db, pf)
+
+	wg.Add(1)
+	go scrapeMovieDiscover(wg, tmdbAPI, db, pf)
+
+	wg.Add(1)
+	go scrapeTvPopular(wg, tmdbAPI, db, pf)
+
+	wg.Add(1)
+	go scrapeTvDiscover(wg, tmdbAPI, db, pf)
+
+	wg.Wait()
 
 	log.Info("scrape finished")
 
