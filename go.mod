@@ -1,6 +1,6 @@
 module github.com/nitwhiz/tmdb-scraper
 
-go 1.19
+go 1.20
 
 require (
 	github.com/ryanbradynd05/go-tmdb v0.0.0-20230108222638-2a68dc6ff40c
