@@ -4,14 +4,14 @@ WORKDIR /build
 
 COPY ./ /build
 
-RUN go build -o dist/tmdb-miner ./cmd/scraper
+RUN go build -o dist/tmdb-scraper ./cmd/scraper
 
 FROM alpine:3.18
 
-WORKDIR /opt/tmdb-miner
+COPY --from=builder /build/dist/tmdb-scraper /usr/local/bin/tmdb-scraper
 
-COPY --from=builder /build/dist/tmdb-miner /opt/tmdb-miner/tmdb-miner
+RUN mkdir /posters && chmod 0777 /posters
 
-RUN mkdir /opt/tmdb-miner/posters
+WORKDIR /
 
-CMD [ "/opt/tmdb-miner/tmdb-miner" ]
+CMD [ "/usr/local/bin/tmdb-scraper" ]

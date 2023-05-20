@@ -2,7 +2,7 @@ package scraper
 
 import (
 	"context"
-	"github.com/nitwhiz/tmdb-miner/internal/poster"
+	"github.com/nitwhiz/tmdb-scraper/internal/poster"
 	"github.com/ryanbradynd05/go-tmdb"
 	log "github.com/sirupsen/logrus"
 	"go.mongodb.org/mongo-driver/bson"

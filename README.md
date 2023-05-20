@@ -1,1 +1,1 @@
-# tmdb-miner
+# tmdb-scraper

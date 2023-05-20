@@ -2,28 +2,40 @@ package main
 
 import (
 	"context"
-	"github.com/nitwhiz/tmdb-miner/internal/poster"
-	"github.com/nitwhiz/tmdb-miner/internal/scraper"
+	"flag"
+	"fmt"
+	"github.com/nitwhiz/tmdb-scraper/internal/config"
+	"github.com/nitwhiz/tmdb-scraper/internal/poster"
+	"github.com/nitwhiz/tmdb-scraper/internal/scraper"
 	"github.com/ryanbradynd05/go-tmdb"
 	log "github.com/sirupsen/logrus"
-	"github.com/spf13/viper"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"time"
 )
 
 func main() {
-	viper.SetConfigFile(".env")
+	configFlag := flag.String("config", "/config.yml", "config file path")
 
-	if err := viper.ReadInConfig(); err != nil {
-		panic(err)
+	if err := config.Load(*configFlag); err != nil {
+		log.Error(err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 
 	defer cancel()
 
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI("mongodb://root:root@localhost:27017"))
+	client, err := mongo.Connect(
+		ctx,
+		options.Client().ApplyURI(
+			fmt.Sprintf(
+				"mongodb://%s:%s@%s",
+				config.C.DB.User,
+				config.C.DB.Password,
+				config.C.DB.Host,
+			),
+		),
+	)
 
 	defer func() {
 		if err = client.Disconnect(ctx); err != nil {
@@ -33,33 +45,23 @@ func main() {
 
 	var tmdbAPI *tmdb.TMDb
 
-	config := tmdb.Config{
-		APIKey:   viper.GetString("TMDB_API_KEY"),
+	tmdbConfig := tmdb.Config{
+		APIKey:   config.C.TMDB.ApiKey,
 		Proxies:  nil,
 		UseProxy: false,
 	}
 
-	tmdbAPI = tmdb.Init(config)
+	tmdbAPI = tmdb.Init(tmdbConfig)
 
 	db := client.Database("tmdb")
 
 	pf := poster.NewFetcher()
 
-	if err := scraper.FetchMovieGenres(tmdbAPI, db); err != nil {
-		panic(err)
-	}
+	log.Info("scraper ready!")
 
-	if err := scraper.FetchTvSeriesGenres(tmdbAPI, db); err != nil {
-		panic(err)
-	}
+	scraperCtx, scraperCancel := scraper.Start(tmdbAPI, db, pf)
 
-	if err := scraper.FetchMovies(tmdbAPI, db, pf, viper.GetInt("PAGES_PER_FETCH")); err != nil {
-		panic(err)
-	}
+	defer scraperCancel()
 
-	if err := scraper.FetchTvSeries(tmdbAPI, db, pf, viper.GetInt("PAGES_PER_FETCH")); err != nil {
-		panic(err)
-	}
-
-	log.Info("done!")
+	<-scraperCtx.Done()
 }

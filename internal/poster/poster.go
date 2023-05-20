@@ -3,7 +3,7 @@ package poster
 import (
 	"errors"
 	"fmt"
-	"github.com/spf13/viper"
+	"github.com/nitwhiz/tmdb-scraper/internal/config"
 	"io"
 	"net/http"
 	"os"
@@ -13,14 +13,14 @@ import (
 )
 
 type Fetcher struct {
-	fsBasePath string
 	baseUrl    string
+	fsBasePath string
 }
 
 func NewFetcher() *Fetcher {
 	return &Fetcher{
-		fsBasePath: strings.TrimRight(viper.GetString("POSTER_DIRECTORY_PATH"), "/"),
-		baseUrl:    strings.TrimRight(viper.GetString("POSTER_BASE_URL"), "/"),
+		baseUrl:    strings.TrimRight(config.C.Posters.BaseUrl, "/"),
+		fsBasePath: strings.TrimRight(config.C.Posters.BaseDir, "/"),
 	}
 }
 

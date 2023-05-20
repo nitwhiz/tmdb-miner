@@ -2,10 +2,10 @@ services:
 
   mongo:
     image: mongo
-    restart: always
+    restart: no
     environment:
-      MONGO_INITDB_ROOT_USERNAME: root
-      MONGO_INITDB_ROOT_PASSWORD: root
+      MONGO_INITDB_ROOT_USERNAME: "root"
+      MONGO_INITDB_ROOT_PASSWORD: "root"
     ports:
       - "27017:27017"
 
@@ -17,6 +17,15 @@ services:
     depends_on:
       - mongo
     environment:
-      ME_CONFIG_MONGODB_ADMINUSERNAME: root
-      ME_CONFIG_MONGODB_ADMINPASSWORD: root
-      ME_CONFIG_MONGODB_URL: mongodb://root:root@mongo:27017/
+      ME_CONFIG_MONGODB_ADMINUSERNAME: "root"
+      ME_CONFIG_MONGODB_ADMINPASSWORD: "root"
+      ME_CONFIG_MONGODB_URL: "mongodb://root:root@mongo:27017/"
+
+  scraper:
+    build:
+      context: .
+    restart: no
+    depends_on:
+      - mongo
+    volumes:
+      - "./config.yml:/config.yml:ro"

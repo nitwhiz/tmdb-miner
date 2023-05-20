@@ -1,0 +1,17 @@
+tmdb:
+  apiKey: "12345"
+  region: "de-DE"
+  language: "de"
+
+rates:
+  scrapeInterval: 1
+  pagesPerScrape: 3
+
+db:
+  host: "mongo:27017"
+  user: "root"
+  password: "root"
+
+posters:
+  baseUrl: "https://image.tmdb.org/t/p/w780"
+  baseDir: "/posters"
