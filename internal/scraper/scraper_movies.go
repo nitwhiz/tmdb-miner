@@ -24,7 +24,48 @@ func GetMoviePopular(api *tmdb.TMDb, opts map[string]string) (*tmdb.MoviePagedRe
 	return api.GetMoviePopular(opts)
 }
 
-func FetchMovies(baseGetter baseMovieGetterFunc, api *tmdb.TMDb, db *mongo.Database, pf *poster.Fetcher, maxPages int) error {
+func GetMovieTopRated(api *tmdb.TMDb, opts map[string]string) (*tmdb.MoviePagedResults, error) {
+	return api.GetMovieTopRated(opts)
+}
+
+func GetChangedMovieIds(api *tmdb.TMDb) (map[int]struct{}, error) {
+	result := map[int]struct{}{}
+
+	page := 1
+
+	for {
+		log.WithFields(log.Fields{
+			"type": "movies",
+			"page": page,
+		}).Info("fetching changes page")
+
+		changes, err := api.GetChangesMovie(map[string]string{
+			"page": strconv.Itoa(page),
+		})
+
+		requestCounter += 1
+
+		if err != nil {
+			return result, err
+		}
+
+		if len(changes.Results) == 0 {
+			break
+		}
+
+		for _, c := range changes.Results {
+			result[c.ID] = struct{}{}
+		}
+
+		page += 1
+
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	return result, nil
+}
+
+func FetchMovies(baseGetter baseMovieGetterFunc, cs map[int]struct{}, api *tmdb.TMDb, db *mongo.Database, pf *poster.Fetcher, maxPages int) error {
 	l := log.WithFields(log.Fields{
 		"type": "movies",
 	})
@@ -46,6 +87,8 @@ func FetchMovies(baseGetter baseMovieGetterFunc, api *tmdb.TMDb, db *mongo.Datab
 
 		l.Info("fetching page")
 
+		time.Sleep(10 * time.Millisecond)
+
 		movies, err := baseGetter(api, opts)
 
 		requestCounter += 1
@@ -61,6 +104,33 @@ func FetchMovies(baseGetter baseMovieGetterFunc, api *tmdb.TMDb, db *mongo.Datab
 				},
 			)
 
+			_, changed := cs[m.ID]
+
+			if changed {
+				log.Info("changed")
+			} else {
+				log.Info("not changed")
+			}
+
+			err := db.Collection(CollectionMovieShort).FindOne(
+				context.TODO(),
+				bson.D{{"id", m.ID}},
+			).Err()
+
+			if err == mongo.ErrNoDocuments {
+				log.Info("not indexed")
+			} else if err == nil {
+				log.Info("indexed")
+			} else {
+				log.Error(err)
+				continue
+			}
+
+			if err == nil && !changed {
+				l.Info("not changed, skipping")
+				continue
+			}
+
 			l.Infof("persisting short `%s`\n", m.Title)
 
 			_, err = db.Collection(CollectionMovieShort).UpdateOne(
@@ -71,8 +141,10 @@ func FetchMovies(baseGetter baseMovieGetterFunc, api *tmdb.TMDb, db *mongo.Datab
 			)
 
 			if err != nil {
-				panic(err)
+				return err
 			}
+
+			time.Sleep(10 * time.Millisecond)
 
 			mi, err := api.GetMovieInfo(m.ID, map[string]string{
 				"language": Language,
@@ -81,9 +153,7 @@ func FetchMovies(baseGetter baseMovieGetterFunc, api *tmdb.TMDb, db *mongo.Datab
 			requestCounter += 1
 
 			if err != nil {
-				l.Warn(err)
-
-				time.Sleep(10 * time.Millisecond)
+				l.Error(err)
 				continue
 			}
 
@@ -103,12 +173,12 @@ func FetchMovies(baseGetter baseMovieGetterFunc, api *tmdb.TMDb, db *mongo.Datab
 			if mi.PosterPath != "" {
 				l.Info("persisting poster")
 
+				time.Sleep(10 * time.Millisecond)
+
 				if err := pf.Download(mi.PosterPath, "movie-"+strconv.Itoa(mi.ID)); err != nil {
-					log.Warn("error persisting poster", err)
+					log.Error("error persisting poster", err)
 				}
 			}
-
-			time.Sleep(10 * time.Millisecond)
 		}
 
 		page = movies.Page + 1
@@ -120,18 +190,26 @@ func FetchMovies(baseGetter baseMovieGetterFunc, api *tmdb.TMDb, db *mongo.Datab
 	return nil
 }
 
-func scrapeMoviePopular(wg *sync.WaitGroup, tmdbAPI *tmdb.TMDb, db *mongo.Database, pf *poster.Fetcher) {
+func scrapeMoviePopular(wg *sync.WaitGroup, cs map[int]struct{}, tmdbAPI *tmdb.TMDb, db *mongo.Database, pf *poster.Fetcher) {
 	defer wg.Done()
 
-	if err := FetchMovies(GetMoviePopular, tmdbAPI, db, pf, config.C.Rates.PagesPerScrape); err != nil {
+	if err := FetchMovies(GetMoviePopular, cs, tmdbAPI, db, pf, config.C.Rates.PagesPerScrape); err != nil {
 		log.Error(err)
 	}
 }
 
-func scrapeMovieDiscover(wg *sync.WaitGroup, tmdbAPI *tmdb.TMDb, db *mongo.Database, pf *poster.Fetcher) {
+func scrapeMovieDiscover(wg *sync.WaitGroup, cs map[int]struct{}, tmdbAPI *tmdb.TMDb, db *mongo.Database, pf *poster.Fetcher) {
 	defer wg.Done()
 
-	if err := FetchMovies(GetMovieDiscover, tmdbAPI, db, pf, config.C.Rates.PagesPerScrape); err != nil {
+	if err := FetchMovies(GetMovieDiscover, cs, tmdbAPI, db, pf, config.C.Rates.PagesPerScrape); err != nil {
+		log.Error(err)
+	}
+}
+
+func scrapeMovieTopRated(wg *sync.WaitGroup, cs map[int]struct{}, tmdbAPI *tmdb.TMDb, db *mongo.Database, pf *poster.Fetcher) {
+	defer wg.Done()
+
+	if err := FetchMovies(GetMovieTopRated, cs, tmdbAPI, db, pf, config.C.Rates.PagesPerScrape); err != nil {
 		log.Error(err)
 	}
 }

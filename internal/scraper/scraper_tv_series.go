@@ -24,7 +24,48 @@ func GetTvPopular(api *tmdb.TMDb, opts map[string]string) (*tmdb.TvPagedResults,
 	return api.GetTvPopular(opts)
 }
 
-func FetchTvSeries(baseGetter baseTvGetterFunc, api *tmdb.TMDb, db *mongo.Database, pf *poster.Fetcher, maxPages int) error {
+func GetTvTopRated(api *tmdb.TMDb, opts map[string]string) (*tmdb.TvPagedResults, error) {
+	return api.GetTvTopRated(opts)
+}
+
+func GetChangedTvIds(api *tmdb.TMDb) (map[int]struct{}, error) {
+	result := map[int]struct{}{}
+
+	page := 1
+
+	for {
+		log.WithFields(log.Fields{
+			"type": "tv_series",
+			"page": page,
+		}).Info("fetching changes page")
+
+		changes, err := api.GetChangesTv(map[string]string{
+			"page": strconv.Itoa(page),
+		})
+
+		requestCounter += 1
+
+		if err != nil {
+			return result, err
+		}
+
+		if len(changes.Results) == 0 {
+			break
+		}
+
+		for _, c := range changes.Results {
+			result[c.ID] = struct{}{}
+		}
+
+		page += 1
+
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	return result, nil
+}
+
+func FetchTvSeries(baseGetter baseTvGetterFunc, cs map[int]struct{}, api *tmdb.TMDb, db *mongo.Database, pf *poster.Fetcher, maxPages int) error {
 	l := log.WithFields(log.Fields{
 		"type": "tv_series",
 	})
@@ -46,6 +87,8 @@ func FetchTvSeries(baseGetter baseTvGetterFunc, api *tmdb.TMDb, db *mongo.Databa
 
 		l.Info("fetching page")
 
+		time.Sleep(10 * time.Millisecond)
+
 		tv, err := baseGetter(api, opts)
 
 		requestCounter += 1
@@ -61,6 +104,33 @@ func FetchTvSeries(baseGetter baseTvGetterFunc, api *tmdb.TMDb, db *mongo.Databa
 				},
 			)
 
+			_, changed := cs[t.ID]
+
+			if changed {
+				log.Info("changed")
+			} else {
+				log.Info("not changed")
+			}
+
+			err := db.Collection(CollectionTvShort).FindOne(
+				context.TODO(),
+				bson.D{{"id", tv.ID}},
+			).Err()
+
+			if err == mongo.ErrNoDocuments {
+				log.Info("not indexed")
+			} else if err == nil {
+				log.Info("indexed")
+			} else {
+				log.Error(err)
+				continue
+			}
+
+			if err == nil && !changed {
+				l.Info("not changed, skipping")
+				continue
+			}
+
 			l.Infof("persisting short `%s`\n", t.Name)
 
 			_, err = db.Collection(CollectionTvShort).UpdateOne(
@@ -71,8 +141,10 @@ func FetchTvSeries(baseGetter baseTvGetterFunc, api *tmdb.TMDb, db *mongo.Databa
 			)
 
 			if err != nil {
-				panic(err)
+				return err
 			}
+
+			time.Sleep(10 * time.Millisecond)
 
 			ti, err := api.GetTvInfo(t.ID, map[string]string{
 				"language": Language,
@@ -81,9 +153,7 @@ func FetchTvSeries(baseGetter baseTvGetterFunc, api *tmdb.TMDb, db *mongo.Databa
 			requestCounter += 1
 
 			if err != nil {
-				l.Warn(err)
-
-				time.Sleep(10 * time.Millisecond)
+				l.Error(err)
 				continue
 			}
 
@@ -103,12 +173,12 @@ func FetchTvSeries(baseGetter baseTvGetterFunc, api *tmdb.TMDb, db *mongo.Databa
 			if ti.PosterPath != "" {
 				l.Info("persisting poster")
 
+				time.Sleep(10 * time.Millisecond)
+
 				if err := pf.Download(ti.PosterPath, "tv-"+strconv.Itoa(ti.ID)); err != nil {
-					log.Warn("error persisting poster", err)
+					log.Error("error persisting poster", err)
 				}
 			}
-
-			time.Sleep(10 * time.Millisecond)
 		}
 
 		page = tv.Page + 1
@@ -120,18 +190,26 @@ func FetchTvSeries(baseGetter baseTvGetterFunc, api *tmdb.TMDb, db *mongo.Databa
 	return nil
 }
 
-func scrapeTvPopular(wg *sync.WaitGroup, tmdbAPI *tmdb.TMDb, db *mongo.Database, pf *poster.Fetcher) {
+func scrapeTvPopular(wg *sync.WaitGroup, cs map[int]struct{}, tmdbAPI *tmdb.TMDb, db *mongo.Database, pf *poster.Fetcher) {
 	defer wg.Done()
 
-	if err := FetchTvSeries(GetTvPopular, tmdbAPI, db, pf, config.C.Rates.PagesPerScrape); err != nil {
+	if err := FetchTvSeries(GetTvPopular, cs, tmdbAPI, db, pf, config.C.Rates.PagesPerScrape); err != nil {
 		log.Error(err)
 	}
 }
 
-func scrapeTvDiscover(wg *sync.WaitGroup, tmdbAPI *tmdb.TMDb, db *mongo.Database, pf *poster.Fetcher) {
+func scrapeTvDiscover(wg *sync.WaitGroup, cs map[int]struct{}, tmdbAPI *tmdb.TMDb, db *mongo.Database, pf *poster.Fetcher) {
 	defer wg.Done()
 
-	if err := FetchTvSeries(GetTvDiscover, tmdbAPI, db, pf, config.C.Rates.PagesPerScrape); err != nil {
+	if err := FetchTvSeries(GetTvDiscover, cs, tmdbAPI, db, pf, config.C.Rates.PagesPerScrape); err != nil {
+		log.Error(err)
+	}
+}
+
+func scrapeTvTopRated(wg *sync.WaitGroup, cs map[int]struct{}, tmdbAPI *tmdb.TMDb, db *mongo.Database, pf *poster.Fetcher) {
+	defer wg.Done()
+
+	if err := FetchTvSeries(GetTvTopRated, cs, tmdbAPI, db, pf, config.C.Rates.PagesPerScrape); err != nil {
 		log.Error(err)
 	}
 }

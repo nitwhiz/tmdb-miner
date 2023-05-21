@@ -63,17 +63,35 @@ func runScrape(tmdbAPI *tmdb.TMDb, db *mongo.Database, pf *poster.Fetcher) error
 		}
 	}()
 
-	wg.Add(1)
-	go scrapeMoviePopular(wg, tmdbAPI, db, pf)
+	csm, err := GetChangedMovieIds(tmdbAPI)
+
+	if err != nil {
+		return err
+	}
+
+	cst, err := GetChangedTvIds(tmdbAPI)
+
+	if err != nil {
+		return err
+	}
 
 	wg.Add(1)
-	go scrapeMovieDiscover(wg, tmdbAPI, db, pf)
+	go scrapeMoviePopular(wg, csm, tmdbAPI, db, pf)
 
 	wg.Add(1)
-	go scrapeTvPopular(wg, tmdbAPI, db, pf)
+	go scrapeMovieDiscover(wg, csm, tmdbAPI, db, pf)
 
 	wg.Add(1)
-	go scrapeTvDiscover(wg, tmdbAPI, db, pf)
+	go scrapeMovieTopRated(wg, csm, tmdbAPI, db, pf)
+
+	wg.Add(1)
+	go scrapeTvPopular(wg, cst, tmdbAPI, db, pf)
+
+	wg.Add(1)
+	go scrapeTvDiscover(wg, cst, tmdbAPI, db, pf)
+
+	wg.Add(1)
+	go scrapeTvTopRated(wg, csm, tmdbAPI, db, pf)
 
 	wg.Wait()
 
@@ -88,6 +106,10 @@ func Start(tmdbAPI *tmdb.TMDb, db *mongo.Database, pf *poster.Fetcher) (context.
 	ctx, cancel := context.WithCancel(context.Background())
 
 	go func() {
+		if err := runScrape(tmdbAPI, db, pf); err != nil {
+			log.Error(err)
+		}
+
 		for {
 			select {
 			case <-ctx.Done():
